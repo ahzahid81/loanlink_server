@@ -81,6 +81,79 @@ function requireRole(...roles) {
   };
 }
 
+// Root
+app.get("/", (req, res) => {
+  res.send("LoanLink API Running ✔️");
+});
+
+
+//Generate jwt + login
+app.post("/jwt", async (req, res) => {
+  try {
+    const { email, name, photoURL } = req.body;
+
+    if (!email) return res.status(400).json({ message: "Email required" });
+
+    let user = await userCollection.findOne({ email });
+
+
+    if (!user) {
+      const newUser = {
+        name: name || "",
+        email,
+        photoURL: photoURL || "",
+        role: "borrower",
+        status: "active",
+        createdAt: new Date(),
+      };
+      const r = await userCollection.insertOne(newUser);
+      user = { _id: r.insertedId, ...newUser };
+    }
+
+    if (user.status === "suspended") {
+      return res.status(403).json({ message: "Your account is suspended" });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user._id.toString(),
+        email: user.email,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({ success: true, role: user.role });
+  } catch (err) {
+    res.status(500).json({ message: "JWT generation failed" });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 connectDB().then(() => {
   app.listen(port, () =>
