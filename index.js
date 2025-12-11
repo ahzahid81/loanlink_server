@@ -234,6 +234,23 @@ app.get("/loans/:id", async (req, res) => {
 })
 
 
+//Loan Patch API Created
+app.patch("/loans/:id", verifyJWT, async(req, res) => {
+    const update = req.body;
+
+    await loanCollection.updateOne(
+        {
+            _id: new ObjectId(req.params.id)
+        },
+        {
+            $set: update
+        }
+    );
+
+    res.json({success: true});
+})
+
+
 
 
 
