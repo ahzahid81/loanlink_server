@@ -251,6 +251,13 @@ app.patch("/loans/:id", verifyJWT, async(req, res) => {
 })
 
 
+// Loans Delete via Manager API
+app.delete("/loans/:id", verifyJWT, requireRole("manager"), async(req, res) => {
+    await loanCollection.deleteOne({
+        _id: new ObjectId(req.params.id)
+    });
+    res.json({success: true});
+})
 
 
 
