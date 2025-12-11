@@ -225,6 +225,14 @@ app.get("/loans", async (req, res) => {
 });
 
 
+//Get One Loans
+app.get("/loans/:id", async (req, res) => {
+    const loan = await loanCollection.findOne({
+        _id: new ObjectId(req.params.id),
+    });
+    res.json(loan);
+})
+
 
 
 
