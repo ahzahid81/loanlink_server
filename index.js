@@ -1,33 +1,53 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const jwt = require('jsonwebtoken');
-// const stripe = require('stripe');
-const cookieParser = require('cookie-parser');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
+const stripe = require("stripe")(process.env.STRIPE_SECRET || "dummy");
+const {
+  MongoClient,
+  ObjectId,
+  ServerApiVersion,
+} = require("mongodb");
 
 const app = express();
 const port = process.env.PORT || 5000;
 
 
-//Middlewares
-app.use(cors({
+app.use(
+  cors({
     origin: process.env.CLIENT_ORIGIN,
     credentials: true,
-}));
-app.use(express.json())
+  })
+);
+app.use(express.json());
 app.use(cookieParser());
 
 
-const uri = process.env.MONGODB_URI;
-
-const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-    },
+//Mongo Connection
+const client = new MongoClient(process.env.MONGODB_URI, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
 });
+
+
+//Collection
+let userCollection, loanCollection, applicationCollection, paymentCollection;
+
+async function connectDB() {
+  await client.connect();
+  const db = client.db(process.env.DB_NAME);
+
+  userCollection = db.collection("users");
+  loanCollection = db.collection("loans");
+  applicationCollection = db.collection("applications");
+  paymentCollection = db.collection("payments");
+
+  console.log("🔥 MongoDB Connected");
+}
 
 function verifyJWT(req, res, next) {
     const token = req.cookies?.token;
