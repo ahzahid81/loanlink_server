@@ -218,6 +218,14 @@ app.post("/loans", verifyJWT, requireRole("manager"), async (req, res) => {
 
 
 
+//Get All Loans
+app.get("/loans", async (req, res) => {
+    const loans = await loanCollection.find().toArray();
+    res.json(loans);
+});
+
+
+
 
 
 
