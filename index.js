@@ -185,8 +185,25 @@ app.post("/users", async (req, res) => {
 });
 
 
+//Users (get All)
+
+app.get("/users", verifyJWT, requireRole("admin"), async (req, res) => {
+  const users = await userCollection.find().toArray();
+  res.json(users);
+});
 
 
+app.patch("/users/:id", verifyJWT, requireRole("admin"), async (req, res) => {
+  const id = req.params.id;
+  const update = req.body;
+
+  await userCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: update }
+  );
+
+  res.json({ success: true });
+});
 
 
 
