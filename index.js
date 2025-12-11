@@ -205,6 +205,17 @@ app.patch("/users/:id", verifyJWT, requireRole("admin"), async (req, res) => {
   res.json({ success: true });
 });
 
+// Loan Create Manager API
+app.post("/loans", verifyJWT, requireRole("manager"), async (req, res) => {
+  const loan = req.body;
+  loan.createdBy = req.user.email;
+  loan.createdAt = new Date();
+  loan.showOnHome = false;
+
+  const result = await loanCollection.insertOne(loan);
+  res.json({ success: true, id: result.insertedId });
+});
+
 
 
 
