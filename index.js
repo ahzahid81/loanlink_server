@@ -3,16 +3,11 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
-const stripe = require("stripe")(process.env.STRIPE_SECRET || "dummy");
-const {
-  MongoClient,
-  ObjectId,
-  ServerApiVersion,
-} = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET || "");
+const { MongoClient, ObjectId, ServerApiVersion } = require("mongodb");
 
 const app = express();
 const port = process.env.PORT || 5000;
-
 
 app.use(
   cors({
@@ -24,7 +19,6 @@ app.use(express.json());
 app.use(cookieParser());
 
 
-//Mongo Connection
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -33,8 +27,6 @@ const client = new MongoClient(process.env.MONGODB_URI, {
   },
 });
 
-
-//Collection
 let userCollection, loanCollection, applicationCollection, paymentCollection;
 
 async function connectDB() {
@@ -50,52 +42,43 @@ async function connectDB() {
 }
 
 
-//JSON Web Token
 function verifyJWT(req, res, next) {
   const token = req.cookies?.token;
-
-  if (!token) {
-    return res.status(401).json({ message: "Unauthorized: No Token" });
-  }
+  if (!token) return res.status(401).json({ message: "Unauthorized: No token" });
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
   } catch (err) {
-    return res.status(401).json({ message: "Unauthorized: Invalid Token" });
+    console.error("JWT verify error:", err);
+    return res.status(401).json({ message: "Unauthorized: Invalid token" });
   }
 }
 
 
-//Middleware Required Roles
 function requireRole(...roles) {
   return (req, res, next) => {
     const userRole = req.user?.role;
-
-    if (!roles.includes(userRole)) {
+    if (!userRole || !roles.includes(userRole)) {
       return res.status(403).json({ message: "Forbidden: Role Denied" });
     }
-
     next();
   };
 }
 
-// Root
+
 app.get("/", (req, res) => {
   res.send("LoanLink API Running ✔️");
 });
 
 
-//Generate jwt + login
 app.post("/jwt", async (req, res) => {
   try {
     const { email, name, photoURL } = req.body;
-
     if (!email) return res.status(400).json({ message: "Email required" });
 
     let user = await userCollection.findOne({ email });
-
 
     if (!user) {
       const newUser = {
@@ -115,11 +98,7 @@ app.post("/jwt", async (req, res) => {
     }
 
     const token = jwt.sign(
-      {
-        id: user._id.toString(),
-        email: user.email,
-        role: user.role,
-      },
+      { id: user._id.toString(), email: user.email, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -133,36 +112,30 @@ app.post("/jwt", async (req, res) => {
 
     res.json({ success: true, role: user.role });
   } catch (err) {
+    console.error("POST /jwt error:", err);
     res.status(500).json({ message: "JWT generation failed" });
   }
 });
 
 
-
-//Logout
 app.post("/logout", (req, res) => {
   res.clearCookie("token", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/",
   });
-
   res.json({ success: true });
 });
 
 
-
-//Post user API
 app.post("/users", async (req, res) => {
   try {
     const { name, email, photoURL, role, status } = req.body;
-
     if (!email) return res.status(400).json({ message: "Email required" });
 
     const exists = await userCollection.findOne({ email });
-
-    if (exists)
-      return res.json({ message: "User exists", user: exists });
+    if (exists) return res.status(200).json({ message: "User exists", user: exists });
 
     const userDoc = {
       name: name || "",
@@ -174,100 +147,238 @@ app.post("/users", async (req, res) => {
     };
 
     const result = await userCollection.insertOne(userDoc);
-
-    res.status(201).json({
-      message: "User created",
-      user: { _id: result.insertedId, ...userDoc },
-    });
+    res.status(201).json({ message: "User created", user: { _id: result.insertedId, ...userDoc } });
   } catch (err) {
+    console.error("POST /users error:", err);
     res.status(500).json({ message: "User create failed" });
   }
 });
 
 
-//Users (get All)
-
 app.get("/users", verifyJWT, requireRole("admin"), async (req, res) => {
-  const users = await userCollection.find().toArray();
-  res.json(users);
+  try {
+    const users = await userCollection.find().toArray();
+    res.json(users);
+  } catch (err) {
+    console.error("GET /users error:", err);
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
 });
 
 
 app.patch("/users/:id", verifyJWT, requireRole("admin"), async (req, res) => {
-  const id = req.params.id;
-  const update = req.body;
-
-  await userCollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: update }
-  );
-
-  res.json({ success: true });
-});
-
-// Loan Create Manager API
-app.post("/loans", verifyJWT, requireRole("manager"), async (req, res) => {
-  const loan = req.body;
-  loan.createdBy = req.user.email;
-  loan.createdAt = new Date();
-  loan.showOnHome = false;
-
-  const result = await loanCollection.insertOne(loan);
-  res.json({ success: true, id: result.insertedId });
-});
-
-
-
-//Get All Loans
-app.get("/loans", async (req, res) => {
-    const loans = await loanCollection.find().toArray();
-    res.json(loans);
-});
-
-
-//Get One Loans
-app.get("/loans/:id", async (req, res) => {
-    const loan = await loanCollection.findOne({
-        _id: new ObjectId(req.params.id),
-    });
-    res.json(loan);
-})
-
-
-//Loan Patch API Created
-app.patch("/loans/:id", verifyJWT, async(req, res) => {
+  try {
+    const id = req.params.id;
     const update = req.body;
-
-    await loanCollection.updateOne(
-        {
-            _id: new ObjectId(req.params.id)
-        },
-        {
-            $set: update
-        }
-    );
-
-    res.json({success: true});
-})
-
-
-// Loans Delete via Manager API
-app.delete("/loans/:id", verifyJWT, requireRole("manager"), async(req, res) => {
-    await loanCollection.deleteOne({
-        _id: new ObjectId(req.params.id)
-    });
-    res.json({success: true});
-})
-
-
-
-
-
-
-
-
-connectDB().then(() => {
-  app.listen(port, () =>
-    console.log(`🚀 Server running on port ${port}`)
-  );
+    await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: update });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /users/:id error:", err);
+    res.status(500).json({ message: "Failed to update user" });
+  }
 });
+
+
+app.post("/loans", verifyJWT, requireRole("manager"), async (req, res) => {
+  try {
+    const loan = req.body;
+    loan.createdBy = req.user.email;
+    loan.createdAt = new Date();
+    loan.showOnHome = loan.showOnHome || false;
+    const result = await loanCollection.insertOne(loan);
+    res.json({ success: true, id: result.insertedId });
+  } catch (err) {
+    console.error("POST /loans error:", err);
+    res.status(500).json({ message: "Failed to create loan" });
+  }
+});
+
+
+app.get("/loans", async (req, res) => {
+  try {
+    const { limit = 0, page = 1, showOnHome, search } = req.query;
+    const q = {};
+    if (showOnHome === "true") q.showOnHome = true;
+    if (search) q.$text = { $search: search }; // requires text index on relevant fields
+    const skip = limit > 0 ? (Number(page) - 1) * Number(limit) : 0;
+    const cursor = loanCollection.find(q).skip(skip).limit(Number(limit) || 0);
+    const loans = await cursor.toArray();
+    res.json(loans);
+  } catch (err) {
+    console.error("GET /loans error:", err);
+    res.status(500).json({ message: "Failed to fetch loans" });
+  }
+});
+
+
+app.get("/loans/:id", async (req, res) => {
+  try {
+    const loan = await loanCollection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!loan) return res.status(404).json({ message: "Loan not found" });
+    res.json(loan);
+  } catch (err) {
+    console.error("GET /loans/:id error:", err);
+    res.status(500).json({ message: "Failed to fetch loan" });
+  }
+});
+
+
+app.patch("/loans/:id", verifyJWT, async (req, res) => {
+  try {
+    const update = req.body;
+    await loanCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: update });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /loans/:id error:", err);
+    res.status(500).json({ message: "Failed to update loan" });
+  }
+});
+
+
+app.delete("/loans/:id", verifyJWT, requireRole("manager"), async (req, res) => {
+  try {
+    await loanCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("DELETE /loans/:id error:", err);
+    res.status(500).json({ message: "Failed to delete loan" });
+  }
+});
+
+
+app.patch("/loans/:id/home", verifyJWT, requireRole("admin"), async (req, res) => {
+  try {
+    const { showOnHome } = req.body;
+    await loanCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { showOnHome } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /loans/:id/home error:", err);
+    res.status(500).json({ message: "Failed to toggle showOnHome" });
+  }
+});
+
+
+app.post("/applications", verifyJWT, async (req, res) => {
+  try {
+    const appDoc = req.body;
+    appDoc.userEmail = req.user.email;
+    appDoc.status = "Pending";
+    appDoc.applicationFeeStatus = "Unpaid";
+    appDoc.createdAt = new Date();
+    const result = await applicationCollection.insertOne(appDoc);
+    res.json({ success: true, id: result.insertedId });
+  } catch (err) {
+    console.error("POST /applications error:", err);
+    res.status(500).json({ message: "Failed to create application" });
+  }
+});
+
+
+app.get("/applications", verifyJWT, async (req, res) => {
+  try {
+    const role = req.user.role;
+    const q = {};
+    if (role === "borrower") q.userEmail = req.user.email;
+    
+    const apps = await applicationCollection.find(q).toArray();
+    res.json(apps);
+  } catch (err) {
+    console.error("GET /applications error:", err);
+    res.status(500).json({ message: "Failed to fetch applications" });
+  }
+});
+
+
+app.patch("/applications/:id/status", verifyJWT, requireRole("manager"), async (req, res) => {
+  try {
+    const { status } = req.body;
+    const update = { status };
+    if (status === "Approved") update.approvedAt = new Date();
+    else update.approvedAt = null;
+    await applicationCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: update });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /applications/:id/status error:", err);
+    res.status(500).json({ message: "Failed to update application status" });
+  }
+});
+
+
+app.patch("/applications/:id/cancel", verifyJWT, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const appData = await applicationCollection.findOne({ _id: new ObjectId(id) });
+    if (!appData) return res.status(404).json({ message: "Application not found" });
+    if (appData.userEmail !== req.user.email) return res.status(403).json({ message: "Forbidden" });
+    if (appData.status !== "Pending") return res.status(400).json({ message: "Cannot cancel unless Pending" });
+    await applicationCollection.updateOne({ _id: new ObjectId(id) }, { $set: { status: "Cancelled" } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /applications/:id/cancel error:", err);
+    res.status(500).json({ message: "Failed to cancel application" });
+  }
+});
+
+
+app.post("/create-checkout-session", verifyJWT, async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET) {
+      return res.status(500).json({ message: "Stripe not configured" });
+    }
+
+    const { applicationId } = req.body;
+    if (!applicationId) return res.status(400).json({ message: "applicationId required" });
+
+    const appData = await applicationCollection.findOne({ _id: new ObjectId(applicationId) });
+    if (!appData) return res.status(404).json({ message: "Application not found" });
+    if (appData.userEmail !== req.user.email) return res.status(403).json({ message: "Forbidden" });
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: { name: "Loan Application Fee" },
+            unit_amount: 1000,
+          },
+          quantity: 1,
+        },
+      ],
+      mode: "payment",
+      success_url: `${process.env.CLIENT_ORIGIN}/payment-success?appId=${applicationId}`,
+      cancel_url: `${process.env.CLIENT_ORIGIN}/payment-cancel`,
+      metadata: {
+        applicationId,
+        userEmail: req.user.email,
+      },
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("POST /create-checkout-session error:", err);
+    res.status(500).json({ message: "Failed to create checkout session" });
+  }
+});
+
+
+app.post("/payment-success/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    await applicationCollection.updateOne({ _id: new ObjectId(id) }, { $set: { applicationFeeStatus: "Paid", paidAt: new Date() } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /payment-success/:id error:", err);
+    res.status(500).json({ message: "Failed to mark payment success" });
+  }
+});
+
+
+connectDB()
+  .then(() => {
+    app.listen(port, () => console.log(`🚀 Server running on port ${port}`));
+  })
+  .catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
