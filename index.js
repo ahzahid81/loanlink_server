@@ -152,6 +152,39 @@ app.post("/logout", (req, res) => {
 
 
 
+//Post user API
+app.post("/users", async (req, res) => {
+  try {
+    const { name, email, photoURL, role, status } = req.body;
+
+    if (!email) return res.status(400).json({ message: "Email required" });
+
+    const exists = await userCollection.findOne({ email });
+
+    if (exists)
+      return res.json({ message: "User exists", user: exists });
+
+    const userDoc = {
+      name: name || "",
+      email,
+      photoURL: photoURL || "",
+      role: role || "borrower",
+      status: status || "active",
+      createdAt: new Date(),
+    };
+
+    const result = await userCollection.insertOne(userDoc);
+
+    res.status(201).json({
+      message: "User created",
+      user: { _id: result.insertedId, ...userDoc },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "User create failed" });
+  }
+});
+
+
 
 
 
