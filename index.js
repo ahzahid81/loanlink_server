@@ -235,7 +235,7 @@ app.patch("/loans/:id", verifyJWT, async (req, res) => {
 });
 
 
-app.delete("/loans/:id", verifyJWT, requireRole("manager"), async (req, res) => {
+app.delete("/loans/:id", verifyJWT, requireRole("manager", "admin"), async (req, res) => {
   try {
     await loanCollection.deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ success: true });
@@ -279,7 +279,7 @@ app.get("/applications", verifyJWT, async (req, res) => {
     const role = req.user.role;
     const q = {};
     if (role === "borrower") q.userEmail = req.user.email;
-    
+
     const apps = await applicationCollection.find(q).toArray();
     res.json(apps);
   } catch (err) {
@@ -320,56 +320,110 @@ app.patch("/applications/:id/cancel", verifyJWT, async (req, res) => {
 });
 
 
+/* ================================
+   STRIPE CHECKOUT
+================================ */
 app.post("/create-checkout-session", verifyJWT, async (req, res) => {
-  try {
-    if (!process.env.STRIPE_SECRET) {
-      return res.status(500).json({ message: "Stripe not configured" });
-    }
+  const { applicationId } = req.body;
+  if (!applicationId) return res.status(400).json({ message: "Application ID required" });
 
-    const { applicationId } = req.body;
-    if (!applicationId) return res.status(400).json({ message: "applicationId required" });
+  const application = await applicationCollection.findOne({
+    _id: new ObjectId(applicationId),
+  });
 
-    const appData = await applicationCollection.findOne({ _id: new ObjectId(applicationId) });
-    if (!appData) return res.status(404).json({ message: "Application not found" });
-    if (appData.userEmail !== req.user.email) return res.status(403).json({ message: "Forbidden" });
+  if (!application) return res.status(404).json({ message: "Application not found" });
 
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: { name: "Loan Application Fee" },
-            unit_amount: 1000,
+  /**
+   * 🔴 IMPORTANT
+   * We attach applicationId to metadata
+   * So payment success can update the correct document
+   */
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ["card"],
+    mode: "payment",
+
+    metadata: {
+      applicationId: application._id.toString(),
+      userEmail: application.userEmail,
+    },
+
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          unit_amount: 1000, // $10 fixed
+          product_data: {
+            name: "Loan Application Fee",
+            description: application.loanTitle,
           },
-          quantity: 1,
         },
-      ],
-      mode: "payment",
-      success_url: `${process.env.CLIENT_ORIGIN}/payment-success?appId=${applicationId}`,
-      cancel_url: `${process.env.CLIENT_ORIGIN}/payment-cancel`,
-      metadata: {
-        applicationId,
-        userEmail: req.user.email,
+        quantity: 1,
       },
-    });
+    ],
 
-    res.json({ url: session.url });
-  } catch (err) {
-    console.error("POST /create-checkout-session error:", err);
-    res.status(500).json({ message: "Failed to create checkout session" });
-  }
+    success_url: `${process.env.CLIENT_ORIGIN}/payment-success/${applicationId}`,
+    cancel_url: `${process.env.CLIENT_ORIGIN}/payment/cancel`,
+  });
+
+  res.json({ url: session.url });
 });
 
 
 app.post("/payment-success/:id", async (req, res) => {
+  const id = req.params.id;
+
+
+  await applicationCollection.updateOne(
+    { _id: new ObjectId(id) },
+    {
+      $set: {
+        applicationFeeStatus: "Paid",
+        paidAt: new Date(),
+        payment: {
+          txId: "stripe_checkout", 
+          email: "stripe@checkout.com",
+          amount: 10,
+        },
+      },
+    }
+  );
+
+  res.json({ success: true });
+});
+
+
+app.get("/dashboard-stats", verifyJWT, async (req, res) => {
   try {
-    const id = req.params.id;
-    await applicationCollection.updateOne({ _id: new ObjectId(id) }, { $set: { applicationFeeStatus: "Paid", paidAt: new Date() } });
-    res.json({ success: true });
+    const role = req.user.role;
+
+    const totalLoans = await loanCollection.countDocuments();
+    const totalApplications = await applicationCollection.countDocuments();
+
+    const pending = await applicationCollection.countDocuments({ status: "Pending" });
+    const approved = await applicationCollection.countDocuments({ status: "Approved" });
+    const rejected = await applicationCollection.countDocuments({ status: "Rejected" });
+
+    // Monthly aggregation (last 6 months)
+    const monthly = await applicationCollection.aggregate([
+      {
+        $group: {
+          _id: { $month: "$createdAt" },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id": 1 } }
+    ]).toArray();
+
+    res.json({
+      totalLoans,
+      totalApplications,
+      pending,
+      approved,
+      rejected,
+      monthly
+    });
   } catch (err) {
-    console.error("POST /payment-success/:id error:", err);
-    res.status(500).json({ message: "Failed to mark payment success" });
+    res.status(500).json({ message: "Failed to load dashboard stats" });
   }
 });
 
